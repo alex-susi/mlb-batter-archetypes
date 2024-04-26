@@ -115,7 +115,6 @@ screeplot(pca, type = "lines", col = "blue") # 4 is best
 
 # Get first 2 principal components
 pc <- pca$x[,1:2]
-pc
 
 
 
