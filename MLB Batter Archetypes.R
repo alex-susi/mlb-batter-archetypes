@@ -458,7 +458,6 @@ server_pie <- function(input, output, session) {
 # Run the Application 
 shinyApp(ui = ui, server = server_pie)
 
-github_token <- "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"
 
 
 
