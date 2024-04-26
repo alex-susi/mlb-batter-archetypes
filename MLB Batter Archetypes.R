@@ -14,10 +14,14 @@ library(stringr)
 
 statcast <- read.csv("statcast3.csv")
 
-ggpairs(statcast, columns = c(names(statcast[,5:dim(statcast)[2]])))
+ggpairs(statcast, columns = c(names(statcast[,11:dim(statcast)[2]])))
 
 
-# Data Cleaning
+
+
+
+## Data Cleaning -----------------------------------------------------
+# Column Names
 statcast <- statcast %>%
   rename("name" = last_name..first_name,
          "avg" = batting_avg,
@@ -58,10 +62,6 @@ statcast_adj <- statcast %>%
          adj_xba = xba/weighted.mean(xba, pa)*100,
          adj_xslg = xslg/weighted.mean(xslg, pa)*100,
          adj_xwoba = xwoba/weighted.mean(xwoba, pa)*100,
-         #adj_avg_ev = exit_velocity_avg/
-         weighted.mean(exit_velocity_avg, pa)*100,
-         #adj_ss_pct = sweet_spot_percent/
-         weighted.mean(sweet_spot_percent, pa)*100,
          adj_barrel_pct = barrel_batted_rate/
            weighted.mean(barrel_batted_rate, pa)*100,
          adj_hh_pct = hard_hit_percent/
@@ -84,113 +84,8 @@ lapply(statcast_adj[,11:(length(names(statcast_adj)))], range)
 
 
 
-# ####
-## Using PCA to transform data for K-means -----------------------
-pca <- prcomp(statcast_adj[,11:(length(names(statcast_adj)))], 
-              scale. = TRUE)
-summary(pca)
 
-ggplot(as.data.frame(pca$x), aes(x = PC1, y = PC2)) + 
-  geom_point() + coord_fixed()
-
-
-# Eigenvalues
-pca$sdev
-
-# Matrix of eigenvectors
-pca$rotation
-
-# Mean of each UNSCALED predictor
-pca$center
-
-# St Dev of each UNSCALED predictor
-pca$scale
-
-# Input data transformed into PCA space
-pca$x
-
-# Elbow Curve for PCA
-screeplot(pca, type = "lines", col = "blue") # 4 is best
-
-# Get first 4 principal components
-pc <- pca$x[,1:2]
-pc
-
-
-
-
-# Loops through varying number of cluster centers for k-means
-wcss <- data.frame("k" = numeric(), "tot_withinss" = numeric())
-
-for (x in c(1:20)) {
-  
-  cluster <- kmeans(pc, centers = x, iter.max = 10, nstart = 1000)
-  wcss[nrow(wcss) + 1, ] <- c(x, cluster$tot.withinss)
-  
-} 
-
-# Elbow Method
-elbow <- ggplot(wcss, aes(x = wcss$k, y = wcss$tot_withinss)) +
-  geom_line() + geom_point() +
-  scale_x_continuous(breaks = 1:20) # k = 3 is best
-
-
-# Silhouette Score
-silhouette_score <- function(k){
-  km <- kmeans(pc, centers = k, nstart = 25)
-  ss <- silhouette(km$cluster, dist(pc))
-  mean(ss[, 3])
-}
-
-k <- 2:15
-avg_sil <- sapply(k, silhouette_score)
-plot(k, type = 'b', avg_sil, xlab = 'Number of clusters', 
-     ylab = 'Average Silhouette Scores', frame = FALSE)
-
-
-
-
-# K-means
-kmeans_mlb <- kmeans(pc, centers = 5, nstart = 1000)
-fviz_cluster(kmeans_mlb, data = pc, geom = "point")
-
-
-
-batter_archetypes <- cbind(statcast_adj, kmeans_mlb$cluster)
-batter_archetypes %>%
-  group_by(`kmeans_mlb$cluster`) %>%
-  pivot_longer(cols = c(5:17), 
-               names_to = "variable", 
-               values_to = "value") %>%
-  group_by(`kmeans_mlb$cluster`, variable) %>%
-  summarize(avg_value = mean(value)) %>%
-  pivot_wider(names_from = variable, values_from = avg_value) %>%
-  as.data.frame() %>%
-  arrange(desc(woba))
-
-batter_archetypes %>%
-  filter(`kmeans_mlb$cluster` == 7, year == 2022)
-# 4 = High Contact, low K%, moderate power
-# 1 = Jack-of-All-Trades
-# 3 = Frequent but weaker contact, moderate BB%, low K%
-# 2 = TTO - high BB%, high K%, high Barrel% and HR%
-# 7 = Superstars - good balance of contact, high power, and discipline
-# 6 = Chasers - high K% and chase %
-# 5 = good power, higher contact, low K%, low whiff %
-
-batter_archetypes %>%
-  filter(last_name..first_name == "LeMahieu, DJ")
-
-
-
-
-
-
-
-
-
-
-## Using PCA for Gaussian Mixture Modeling (GMM) ---------------------
+## PCA for Gaussian Mixture Modeling (GMM) -----------------------------
 
 pca <- prcomp(statcast_adj[,11:(length(names(statcast_adj)))], 
               scale. = TRUE)
@@ -218,45 +113,39 @@ pca$x
 # Elbow Curve for PCA
 screeplot(pca, type = "lines", col = "blue") # 4 is best
 
-# Get first 4 principal components
+# Get first 2 principal components
 pc <- pca$x[,1:2]
 pc
 
 
 
-# Loop to run through varying number of centers for kmeans
-wcss <- data.frame("k" = numeric(), "tot_withinss" = numeric())
-
-# Using 2 principal components
-for (x in c(1:20)) {
-  
-  cluster <- Mclust(pc, G = x)
-  wcss[nrow(wcss) + 1, ] <- c(x, cluster$tot.withinss)
-  
-} 
-
-
-# Silhouette Score
-silhouette_scores <- sapply(2:15, function(k) {
+# Silhouette Scores to determine # of Clusters
+silhouette_scores <- cbind(2:10, sapply(2:10, function(k) {
   gmm_model <- Mclust(pc, G = k)
   silhouette_score <- silhouette(gmm_model$classification, 
                                  dist(pc))
-  #ss <- silhouette(km$cluster, dist(pc))
-  mean(silhouette_score[, 3])
-})
-
+  mean(silhouette_score[, 3])})) %>% 
+  as.data.frame()
 
 # Plot Silhouette scores
-plot(2:15, silhouette_scores, type = "b", 
+plot(silhouette_scores[,1], silhouette_scores[,2], type = "b", 
      xlab = "Number of Clusters", 
      ylab = "Silhouette Score", 
      main = "Silhouette Score vs. Number of Clusters")
 
+# # of Clusters > 2 that maximizes Silhouette Score = 5
+clusters <- silhouette_scores %>%
+  filter(V1 > 2) %>%
+  filter(V2 == max(V2)) %>%
+  pull(V1)
+
+  
 
 
-# GMM Model
+
+## GMM Model -----------------------------------------------------------
 set.seed(123)
-gmm_mlb <- Mclust(pc, G = 5)
+gmm_mlb <- Mclust(pc, G = clusters)
 fviz_cluster(gmm_mlb, data = pc, geom = "point", alpha = 0.5,
              show.clust.cent = TRUE)
 gmm_mlb$parameters$mean
@@ -267,7 +156,7 @@ gmm_mlb$parameters$mean
 cluster_probs <- round(predict(gmm_mlb, data = pc)$z, 3)
 head(cluster_probs)
 
-
+# Combines Cluster Probabilities with Player Data
 batter_archetypes_gmm <- statcast_adj %>%
   cbind(gmm_mlb$classification, cluster_probs) %>%
   rename("Cluster" = `gmm_mlb$classification`,
@@ -275,9 +164,7 @@ batter_archetypes_gmm <- statcast_adj %>%
          "probC2" = c('2'),
          "probC3" = c('3'),
          "probC4" = c('4'),
-         "probC5" = c('5')
-#         "probC6" = c('6'),
-) %>%
+         "probC5" = c('5')) %>%
   select(-Cluster, Cluster) %>%
   mutate(PlayerYear = paste(str_split(name, ", ", simplify = T)[, 2],
                             str_split(name, ", ", simplify = T)[, 1],
@@ -285,22 +172,21 @@ batter_archetypes_gmm <- statcast_adj %>%
   arrange(PlayerYear)
 
 
-batter_archetypes_gmm_agg <- batter_archetypes_gmm %>%
-  group_by(Cluster) %>%
-  pivot_longer(cols = c(11:ncol(batter_archetypes_gmm)-2), 
-               names_to = "variable", 
-               values_to = "value") %>%
-  group_by(Cluster, variable) %>%
-  summarize(avg_value = mean(value)) %>%
-  pivot_wider(names_from = variable, values_from = avg_value) %>%
-  mutate_at(vars(c('probC1', 'probC2', 'probC3', 
-                   'probC4', 
-                   'probC5'#, 'probC6'
-                   )), ~ round(., 3)) %>%
-  as.data.frame() %>%
-  #select(-year, -pa) %>%
-  arrange(desc(woba))
-
+# Aggregates Results to see Average Attributes of each Cluster
+batter_archetypes_gmm_agg <- data.frame()
+for (c in 1:clusters) {
+  
+  add <- batter_archetypes_gmm %>%
+    group_by(Cluster) %>%
+    filter(Cluster == c) %>%
+    summarize_at(vars(starts_with('adj_'), woba), 
+                 funs(weighted.mean(.,eval(as.symbol(
+                   paste("probC", c, sep = "")))))) %>%
+    as.data.frame()
+  
+  batter_archetypes_gmm_agg <- rbind(batter_archetypes_gmm_agg, add)
+  
+}
 
 
 
@@ -311,7 +197,7 @@ batter_archetypes_gmm %>%
   filter(name == "Gallo, Joey")
 
 
-# Clusters
+# Cluster Definitions
 # 1 = TTO - high HR%, high BB%, high K%
 # 2 = Superstar - balance of power, patience, and contact
 # 3 = Chaser
@@ -572,7 +458,7 @@ server_pie <- function(input, output, session) {
 # Run the Application 
 shinyApp(ui = ui, server = server_pie)
 
-
+github_token <- "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"
 
 
 
@@ -677,6 +563,102 @@ batter_archetypes_gmm %>%
 
 
 
+
+## PCA to transform data for K-means (NOT USED) -----------------------
+pca <- prcomp(statcast_adj[,11:(length(names(statcast_adj)))], 
+              scale. = TRUE)
+summary(pca)
+
+ggplot(as.data.frame(pca$x), aes(x = PC1, y = PC2)) + 
+  geom_point() + coord_fixed()
+
+
+# Eigenvalues
+pca$sdev
+
+# Matrix of eigenvectors
+pca$rotation
+
+# Mean of each UNSCALED predictor
+pca$center
+
+# St Dev of each UNSCALED predictor
+pca$scale
+
+# Input data transformed into PCA space
+pca$x
+
+# Elbow Curve for PCA
+screeplot(pca, type = "lines", col = "blue") # 4 is best
+
+# Get first 4 principal components
+pc <- pca$x[,1:2]
+pc
+
+
+
+
+# Loops through varying number of cluster centers for k-means
+wcss <- data.frame("k" = numeric(), "tot_withinss" = numeric())
+
+for (x in c(1:20)) {
+  
+  cluster <- kmeans(pc, centers = x, iter.max = 10, nstart = 1000)
+  wcss[nrow(wcss) + 1, ] <- c(x, cluster$tot.withinss)
+  
+} 
+
+# Elbow Method
+elbow <- ggplot(wcss, aes(x = wcss$k, y = wcss$tot_withinss)) +
+  geom_line() + geom_point() +
+  scale_x_continuous(breaks = 1:20) # k = 3 is best
+
+
+# Silhouette Score
+silhouette_score <- function(k){
+  km <- kmeans(pc, centers = k, nstart = 25)
+  ss <- silhouette(km$cluster, dist(pc))
+  mean(ss[, 3])
+}
+
+k <- 2:15
+avg_sil <- sapply(k, silhouette_score)
+plot(k, type = 'b', avg_sil, xlab = 'Number of clusters', 
+     ylab = 'Average Silhouette Scores', frame = FALSE)
+
+
+
+
+# K-means
+kmeans_mlb <- kmeans(pc, centers = 5, nstart = 1000)
+fviz_cluster(kmeans_mlb, data = pc, geom = "point")
+
+
+
+batter_archetypes <- cbind(statcast_adj, kmeans_mlb$cluster)
+batter_archetypes %>%
+  group_by(`kmeans_mlb$cluster`) %>%
+  pivot_longer(cols = c(5:17), 
+               names_to = "variable", 
+               values_to = "value") %>%
+  group_by(`kmeans_mlb$cluster`, variable) %>%
+  summarize(avg_value = mean(value)) %>%
+  pivot_wider(names_from = variable, values_from = avg_value) %>%
+  as.data.frame() %>%
+  arrange(desc(woba))
+
+batter_archetypes %>%
+  filter(`kmeans_mlb$cluster` == 7, year == 2022)
+# 4 = High Contact, low K%, moderate power
+# 1 = Jack-of-All-Trades
+# 3 = Frequent but weaker contact, moderate BB%, low K%
+# 2 = TTO - high BB%, high K%, high Barrel% and HR%
+# 7 = Superstars - good balance of contact, high power, and discipline
+# 6 = Chasers - high K% and chase %
+# 5 = good power, higher contact, low K%, low whiff %
+
+batter_archetypes %>%
+  filter(last_name..first_name == "LeMahieu, DJ")
 
 ## Junk --------------------------
 batter_archetypes_gmm %>%
