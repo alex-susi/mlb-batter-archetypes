@@ -11,16 +11,17 @@ library(formattable)
 library(purrr)
 library(RColorBrewer)
 library(stringr)
-
-statcast <- read.csv("statcast3.csv")
-
-ggpairs(statcast, columns = c(names(statcast[,11:dim(statcast)[2]])))
+library(knitr)
+library(ClusterR)
 
 
+statcast <- read.csv("statcast4.csv")
 
 
 
-## Data Cleaning -----------------------------------------------------
+
+
+## Data Cleaning ---------------------------------------------------------
 # Column Names
 statcast <- statcast %>%
   rename("name" = last_name..first_name,
@@ -33,208 +34,232 @@ statcast <- statcast %>%
 
 
 # Cleans up Names and # of PAs
-Encoding(statcast$name) <- "latin1"
-statcast <- statcast %>%
-  mutate(include = ifelse(pa >= 400 | year == 2024, 1, 0)) %>%
-  filter(include == 1) %>%
-  select(-include)
+#Encoding(statcast$name) <- "latin1"
 
 
-
+# League Averages
 lg_avgs <- statcast %>%
-  pivot_longer(cols = c(5:ncol(statcast)), 
-               names_to = "variable", 
-               values_to = "value") %>%
-  group_by(year, variable) %>%
-  summarize(avg_value = weighted.mean(value, pa)) %>%
-  pivot_wider(names_from = variable, values_from = avg_value) %>%
+  group_by(year) %>%
+  summarise_at(.vars = vars(c(5:ncol(statcast) - 1)), 
+               .funs = c(mean = "mean")) %>%
   as.data.frame()
+
+lg_avgs %>%
+  select(1, 8:ncol(lg_avgs)) %>%
+  kable()
 
 
 
 # Converts stats to scale above/below Lg Avgs for that year
 statcast_adj <- statcast %>%
   group_by(year) %>%
-  mutate(adj_k_pct = k_percent/
-           weighted.mean(k_percent, pa)*100,
-         adj_bb_pct = bb_percent/
-           weighted.mean(bb_percent, pa)*100,
-         adj_xba = xba/weighted.mean(xba, pa)*100,
-         adj_xslg = xslg/weighted.mean(xslg, pa)*100,
-         adj_xwoba = xwoba/weighted.mean(xwoba, pa)*100,
-         adj_barrel_pct = barrel_batted_rate/
-           weighted.mean(barrel_batted_rate, pa)*100,
-         adj_hh_pct = hard_hit_percent/
-           weighted.mean(hard_hit_percent, pa)*100,
-         adj_zswm_pct = z_swing_miss_percent/
-           weighted.mean(z_swing_miss_percent, pa)*100,
-         adj_ozsw_pct = oz_swing_percent/
-           weighted.mean(oz_swing_percent, pa)*100,
-         adj_ozswm_pct = oz_swing_miss_percent/
-           weighted.mean(oz_swing_miss_percent, pa)*100,
-         adj_hr_rate = hr_rate/weighted.mean(hr_rate, pa)*100) %>%
-  select(c(1:10), c(24:34)) %>%
+  mutate(across(c(k_percent, bb_percent, xba, xslg, xwoba, xwobacon, 
+                  barrel_batted_rate, hard_hit_percent, 
+                  #sweet_spot_percent,
+                  z_swing_miss_percent, oz_swing_percent, 
+                  oz_swing_miss_percent, hr_rate), 
+                ~ . / weighted.mean(., pa) * 100, 
+                .names = "{.col}+")) %>%
+  rename_with(~ gsub("percent", "pct", .), ends_with("+")) %>%
+  rename_with(~ gsub("swing", "sw", .), ends_with("+")) %>%
+  rename_with(~ gsub("batted_", "", .), ends_with("+")) %>%
+  select(1:10, ends_with("+")) %>%
+  filter(pa > 200) %>%
   as.data.frame()
 
 
-head(scale(statcast_adj[,11:(length(names(statcast_adj)))]))
-lapply(statcast_adj[,11:(length(names(statcast_adj)))], sd)
-lapply(statcast_adj[,11:(length(names(statcast_adj)))], range)
+
+# Correlation Matrix
+ggpairs(statcast_adj, columns = grep("\\+$", names(statcast_adj)))
 
 
 
+head(scale(statcast_adj[,c(grep("\\+$", names(statcast_adj)))]))
+lapply(statcast_adj[,c(grep("\\+$", names(statcast_adj)))], sd)
+lapply(statcast_adj[,c(grep("\\+$", names(statcast_adj)))], range)
+colMeans(statcast_adj[,c(grep("\\+$", names(statcast_adj)))])
 
 
-## PCA for Gaussian Mixture Modeling (GMM) -----------------------------
+# Current best
+# 200 PA's, TRUE Scaled, 4 PC's, 8 clusters, EII (0.2021) 
 
-pca <- prcomp(statcast_adj[,11:(length(names(statcast_adj)))], 
+
+
+## Principal Component Analysis (PCA) ------------------------------------
+set.seed(789)
+pca <- prcomp(statcast_adj[,c(grep("\\+$", names(statcast_adj)))], 
               scale. = TRUE)
-summary(pca)
+pca_summary <- summary(pca)
 
 ggplot(as.data.frame(pca$x), aes(x = PC1, y = PC2)) + 
   geom_point() + coord_fixed()
 
 
-# Eigenvalues
-pca$sdev
+(pca$sdev)^2 # Eigenvalues
+round(pca$rotation[,1:4],4) # Matrix of eigenvectors
+pca$center # Mean of each unscaled predictor
+pca$scale # St Dev of each unscaled predictor
+pca$x # Input data transformed into PCA space
 
-# Matrix of eigenvectors
-pca$rotation
-
-# Mean of each UNSCALED predictor
-pca$center
-
-# St Dev of each UNSCALED predictor
-pca$scale
-
-# Input data transformed into PCA space
-pca$x
 
 # Elbow Curve for PCA
 screeplot(pca, type = "lines", col = "blue") # 4 is best
+plot(c(1:ncol(pca_summary$importance)), (pca$sdev)^2,
+     xlab = "Number of Principal Components",
+     ylab = "Variances",
+     main = "Statcast PCA Scree Plot",
+     type = "b", col = "blue")
+plot(c(1:ncol(pca_summary$importance)), pca_summary$importance[3,],
+     xlab = "Number of Principal Components",
+     ylab = "Cumulative Proportion of Variance",
+     main = "Principal Components vs Cumulative Variance",
+     type = "b", col = "blue")
 
-# Get first 2 principal components
-pc <- pca$x[,1:2]
+
+# Get first 4 principal components
+pc <- pca$x[,1:4]
 
 
 
 # Silhouette Scores to determine # of Clusters
-silhouette_scores <- cbind(2:10, sapply(2:10, function(k) {
-  gmm_model <- Mclust(pc, G = k)
-  silhouette_score <- silhouette(gmm_model$classification, 
-                                 dist(pc))
-  mean(silhouette_score[, 3])})) %>% 
-  as.data.frame()
+silhouette_scores <- data.frame("Model" = character(), 
+                                "Clusters" = numeric(),
+                                "SilhouetteScore" = numeric())
+models <- c("EII")
+
+for (m in models) {
+  for (c in c(2:20)) {
+    
+    set.seed(23)
+    gmm_model <- Mclust(pc, G = c, modelNames = m)
+    silhouette_score <- silhouette(gmm_model$classification, dist(pc))
+    
+    silhouette_scores[nrow(silhouette_scores) + 1, ] <- 
+      c(m, c, round(mean(silhouette_score[, 3]), 4))
+    
+  }
+}
+
 
 # Plot Silhouette scores
-plot(silhouette_scores[,1], silhouette_scores[,2], type = "b", 
+plot(silhouette_scores[4:11,2], silhouette_scores[4:11,3], type = "b", 
      xlab = "Number of Clusters", 
      ylab = "Silhouette Score", 
      main = "Silhouette Score vs. Number of Clusters")
 
-# # of Clusters > 2 that maximizes Silhouette Score = 5
-clusters <- silhouette_scores %>%
-  filter(V1 > 2) %>%
-  filter(V2 == max(V2)) %>%
-  pull(V1)
-
-  
+silhouette_scores %>%
+  arrange(desc(Clusters)) %>%
+  head(n = 10)
 
 
 
-## GMM Model -----------------------------------------------------------
+
+
+## Gaussian Mixture Modeling (GMM) ---------------------------------------
 set.seed(123)
-gmm_mlb <- Mclust(pc, G = clusters)
+clusters <- 8
+gmm_mlb <- Mclust(pc, G = clusters, modelNames = 'EII')
+
 fviz_cluster(gmm_mlb, data = pc, geom = "point", alpha = 0.5,
              show.clust.cent = TRUE)
-gmm_mlb$parameters$mean
+round(gmm_mlb$parameters$mean, 4)
 
 
 
-# Probability of Being in each Cluster
-cluster_probs <- round(predict(gmm_mlb, data = pc)$z, 3)
-head(cluster_probs)
-
-# Combines Cluster Probabilities with Player Data
-batter_archetypes_gmm <- statcast_adj %>%
-  cbind(gmm_mlb$classification, cluster_probs) %>%
-  rename("Cluster" = `gmm_mlb$classification`,
-         "probC1" = c('1'),
-         "probC2" = c('2'),
-         "probC3" = c('3'),
-         "probC4" = c('4'),
-         "probC5" = c('5')) %>%
+# Joins Cluster Probabilities with Player Data
+batter_archetypes <- statcast_adj %>%
+  cbind(gmm_mlb$classification, 
+        round(predict(gmm_mlb, data = pc)$z, 3)) %>%
+  rename("Cluster" = `gmm_mlb$classification`) %>%
+  rename_with(~ str_replace(., "^[0-9]+$", ~ paste0("probC", .))) %>%
   select(-Cluster, Cluster) %>%
-  mutate(PlayerYear = paste(str_split(name, ", ", simplify = T)[, 2],
+  mutate(across(c(ends_with('+')), round, 2)) %>%
+  mutate(maxProb = do.call(pmax, select(., starts_with("probC"))),
+         PlayerYear = paste(str_split(name, ", ", simplify = T)[, 2],
                             str_split(name, ", ", simplify = T)[, 1],
                             year, sep = " ")) %>%
   arrange(PlayerYear)
 
 
+
+
 # Aggregates Results to see Average Attributes of each Cluster
-batter_archetypes_gmm_agg <- data.frame()
-for (c in 1:clusters) {
-  
-  add <- batter_archetypes_gmm %>%
-    group_by(Cluster) %>%
-    filter(Cluster == c) %>%
-    summarize_at(vars(starts_with('adj_'), woba), 
-                 funs(weighted.mean(.,eval(as.symbol(
-                   paste("probC", c, sep = "")))))) %>%
-    as.data.frame()
-  
-  batter_archetypes_gmm_agg <- rbind(batter_archetypes_gmm_agg, add)
-  
+weighted_mean <- function(x, w) {
+  sum(x * w, na.rm = TRUE) / sum(w, na.rm = TRUE)
 }
 
+weight_cols <- batter_archetypes %>%
+  select(starts_with("probC")) %>%
+  names()
+
+cols_to_summarize <- batter_archetypes %>%
+  select(ends_with("+"), avg, obp, slg, ops, woba) %>%
+  names()
 
 
-batter_archetypes_gmm %>%
-  filter(Cluster == 2, year == 2016)
-
-batter_archetypes_gmm %>%
-  filter(name == "Gallo, Joey")
-
-
-# Cluster Definitions
-# 1 = TTO - high HR%, high BB%, high K%
-# 2 = Superstar - balance of power, patience, and contact
-# 3 = Chaser
-# 4 = Contact-focused
-# 5 = Well-rounded
-
-
-batter_archetypes_gmm %>%
-  group_by(Cluster) %>%
-  summarise(n = n()) %>%
+batter_archetypes_agg <- batter_archetypes %>%
+  pivot_longer(cols = all_of(weight_cols), names_to = "Cluster", 
+               names_prefix = "probC", values_to = "weight", 
+               names_repair = "unique") %>%
+  group_by(Cluster...23) %>%
+  summarize(across(all_of(cols_to_summarize), ~ weighted_mean(., weight), 
+                   .names = "{col}")) %>%
+  mutate(across(c(ends_with('+')), round, 2)) %>%
+  mutate(across(c(avg, obp, slg, ops, woba), round, 3)) %>%
+  mutate(iso = slg - avg) %>%
+  relocate(iso, .after = ops) %>%
+  rename("Cluster" = `Cluster...23`) %>%
   as.data.frame()
 
-batter_archetypes_gmm %>%
-  arrange(desc(probC5)) %>%
-  filter(year == 2023) %>%
-  head()
+
+
+# Exploring Results
+batter_archetypes %>%
+  filter(Cluster == 2, year == 2016)
+
+batter_archetypes %>%
+  filter(name == "Lindor, Francisco") %>%
+  relocate(PlayerYear, .before = pa) %>%
+  select(-name, -player_id, -year)
+
+batter_archetypes %>%
+  arrange(maxProb) %>%
+  head(n = 20)
+
+batter_archetypes %>%
+  group_by(Cluster) %>%
+  summarise(n = n()) %>%
+  mutate(prop = round(n/sum(n),3)) %>%
+  as.data.frame()
+
+batter_archetypes %>%
+  arrange(desc(probC3)) %>%
+  #filter(year == 2023) %>%
+  select(-c(player_id, PlayerYear)) %>%
+  #filter(year %in%  c(2023, 2022, 2021)) %>%
+  head(n = 20)
 
 
 
 
 
-## RShiny Application ----------------------------------------------------- 
+
+## RShiny Application ---------------------------------------------------- 
 # Define UI
 ui <- fluidPage(
   titlePanel("Player Archetype Comparisons"),
   sidebarLayout(
     sidebarPanel(
       selectizeInput(inputId = "player1", label = "Select Player 1:", 
-                  choices = head(batter_archetypes_gmm$PlayerYear),
+                  choices = head(batter_archetypes$PlayerYear),
                   selected = 'Juan Soto 2021',
-                  options = list(maxOptions = 50)),
+                  options = list(maxOptions = 500)),
       selectizeInput(inputId = "player2", label = "Select Player 2:", 
-                  choices = head(batter_archetypes_gmm$PlayerYear),
+                  choices = head(batter_archetypes$PlayerYear),
                   selected = 'Bryce Harper 2021',
-                  options = list(maxOptions = 50))
+                  options = list(maxOptions = 500))
     ),
     mainPanel(
-      #plotlyOutput("radar")
       
       tabsetPanel(
         id = "tabs",
@@ -263,22 +288,22 @@ server_pie <- function(input, output, session) {
   
   # Player Lists
   updateSelectizeInput(session, 'player1', 
-                       choices = unique(batter_archetypes_gmm$PlayerYear), 
+                       choices = unique(batter_archetypes$PlayerYear), 
                        server = TRUE)
   updateSelectizeInput(session, 'player2', 
-                       choices = unique(batter_archetypes_gmm$PlayerYear), 
+                       choices = unique(batter_archetypes$PlayerYear), 
                        server = TRUE)
   
   
   # Dynamic Tab Titles
   output$title1 = renderText({
-    batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == input$player1, 
-                                ncol(batter_archetypes_gmm)] 
+    batter_archetypes[batter_archetypes$PlayerYear == input$player1,
+                      ncol(batter_archetypes)] 
   })
   
   output$title2 = renderText({
-    batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == input$player2, 
-                                ncol(batter_archetypes_gmm)]
+    batter_archetypes[batter_archetypes$PlayerYear == input$player2,
+                      ncol(batter_archetypes)]
   })
   
   
@@ -286,21 +311,20 @@ server_pie <- function(input, output, session) {
   # Player 1 Pie Chart
   output$pie1 <- renderPlotly({
     player_year_data <- 
-      batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear ==
-                              input$player1, ] %>% 
-      mutate_at(vars("probC1", "probC2", "probC3", 
-                     "probC4", "probC5"), ~.*100)
+      batter_archetypes[batter_archetypes$PlayerYear == input$player1, 
+                        ]%>% 
+      mutate_at(vars((c(starts_with('probC')))), ~.*100)
     
     
-    r <- percent(map_dbl(player_year_data[, c("probC1", "probC2", 
-                                              "probC3", "probC4", 
-                                              "probC5")], ~.x))
+    r <- percent(map_dbl(
+      player_year_data[, grepl("probC", 
+                               names(player_year_data))], ~.x))
     
     p <- plot_ly(
       type = 'pie',
       values = r, 
-      labels = c("TTO", "Superstar", "Contact-focused", 
-                "All-around", "Chaser"), 
+      labels = c("Average", "Chaser", "Contact-focused",
+                 "Superstar", "Low-Power", "TTO", "Patient", "Walker"), 
       marker = list(colors = brewer.pal(length(r), "Set1")),
       textinfo = 'label+percent',
       showlegend = TRUE
@@ -314,21 +338,20 @@ server_pie <- function(input, output, session) {
   # Player 2 Pie Chart
   output$pie2 <- renderPlotly({
     player_year_data <- 
-      batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == 
-                              input$player2, ] %>% 
-      mutate_at(vars("probC1", "probC2", "probC3", 
-                     "probC4", "probC5"), ~.*100)
+      batter_archetypes[batter_archetypes$PlayerYear == input$player2, 
+                        ]%>% 
+      mutate_at(vars(c(starts_with('probC'))), ~.*100)
     
     
-    r <- percent(map_dbl(player_year_data[, c("probC1", "probC2", 
-                                              "probC3", "probC4", 
-                                              "probC5")], ~.x))
+    r <- percent(map_dbl(
+      player_year_data[, grepl("probC", 
+                               names(player_year_data))], ~.x))
     
     p <- plot_ly(
       type = 'pie',
       values = r, 
-      labels = c("TTO", "Superstar", "Chaser",
-                 "Contact-focused", "All-around"), 
+      labels = c("Average", "Chaser", "Contact-focused",
+                 "Superstar", "Low-Power","TTO", "Patient", "Walker"), 
       marker = list(colors = brewer.pal(length(r), "Set1")),
       textinfo = 'label+percent',
       showlegend = TRUE
@@ -342,21 +365,21 @@ server_pie <- function(input, output, session) {
   # Player Comparison Pie Chart
   output$pieComp1 <- renderPlotly({
     player_year_data <- 
-      batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == 
-                              input$player1, ] %>% 
-      mutate_at(vars("probC1", "probC2", "probC3", 
-                     "probC4", "probC5"), ~.*100)
+      batter_archetypes[batter_archetypes$PlayerYear == input$player1, 
+                        ]%>% 
+      mutate_at(vars(c(starts_with('probC'))), ~.*100)
     
     
-    r <- percent(map_dbl(player_year_data[, c("probC1", "probC2", 
-                                              "probC3", "probC4", 
-                                              "probC5")], ~.x))
+    r <- percent(map_dbl(
+      player_year_data[, grepl("probC", 
+                               names(player_year_data))], ~.x))
+    
     
     p <- plot_ly(
       type = 'pie',
       values = r, 
-      labels = c("TTO", "Superstar", "Chaser",
-                 "Contact-focused", "All-around"), 
+      labels = c("Average", "Chaser", "Contact-focused",
+                 "Superstar", "Low-Power", "TTO", "Patient", "Walker"), 
       marker = list(colors = brewer.pal(length(r), "Set1")),
       textinfo = 'label+percent',
       showlegend = TRUE
@@ -371,21 +394,20 @@ server_pie <- function(input, output, session) {
   
   output$pieComp2 <- renderPlotly({
     player_year_data <- 
-      batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == 
+      batter_archetypes[batter_archetypes$PlayerYear == 
                               input$player2, ] %>% 
-      mutate_at(vars("probC1", "probC2", "probC3", 
-                     "probC4", "probC5"), ~.*100)
+      mutate_at(vars(c(starts_with('probC'))), ~.*100)
     
     
-    r <- percent(map_dbl(player_year_data[, c("probC1", "probC2", 
-                                              "probC3", "probC4", 
-                                              "probC5")], ~.x))
+    r <- percent(map_dbl(
+      player_year_data[, grepl("probC", 
+                               names(player_year_data))], ~.x))
     
     p <- plot_ly(
       type = 'pie',
       values = r, 
-      labels = c("TTO", "Superstar", "Chaser",
-                 "Contact-focused", "All-around"), 
+      labels = c("Average", "Chaser", "Contact-focused",
+                 "Superstar", "Low-Power", "TTO", "Patient", "Walker"), 
       marker = list(colors = brewer.pal(length(r), "Set1")),
       textinfo = 'label+percent',
       showlegend = TRUE
@@ -399,32 +421,30 @@ server_pie <- function(input, output, session) {
   
   output$pieComp <- renderPlotly({
     player1_year_data <- 
-      batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == 
+      batter_archetypes[batter_archetypes$PlayerYear == 
                               input$player1, ] %>% 
-      mutate_at(vars("probC1", "probC2", "probC3", 
-                     "probC4", "probC5"), ~.*100)
+      mutate_at(vars(c(starts_with('probC'))), ~.*100)
     
     player2_year_data <- 
-      batter_archetypes_gmm[batter_archetypes_gmm$PlayerYear == 
+      batter_archetypes[batter_archetypes$PlayerYear == 
                               input$player2, ] %>% 
-      mutate_at(vars("probC1", "probC2", "probC3", 
-                     "probC4", "probC5"), ~.*100)
+      mutate_at(vars(c(starts_with('probC'))), ~.*100)
     
     
     
-    r1 <- percent(map_dbl(player1_year_data[, c("probC1", "probC2", 
-                                                "probC3", "probC4", 
-                                                "probC5")], ~.x))
+    r1 <- percent(map_dbl(
+      player1_year_data[, grepl("probC", 
+                                names(player_year_data))], ~.x))
     
-    r2 <- percent(map_dbl(player2_year_data[, c("probC1", "probC2", 
-                                                "probC3", "probC4", 
-                                                "probC5")], ~.x))
+    r2 <- percent(map_dbl(
+      player2_year_data[, grepl("probC", 
+                                names(player_year_data))], ~.x))
     
     
     p1 <- plot_ly(
       type = 'pie',
-      labels = c("TTO", "Superstar", "Chaser",
-                 "Contact-focused", "All-around"),
+      labels = c("Average", "Chaser", "Contact-focused",
+                 "Superstar", "Low-Power", "TTO", "Patient", "Walker"),
       values = r1,
       domain = list(x = c(0, 0.48)),
       marker = list(colors = brewer.pal(length(r1), "Set1")),
@@ -435,8 +455,8 @@ server_pie <- function(input, output, session) {
     
     p2 <- plot_ly(
       type = 'pie',
-      labels = c("TTO", "Superstar", "Chaser",
-                 "Contact-focused", "All-around"),
+      labels = c("Average", "Chaser", "Contact-focused",
+                 "Superstar", "Low-Power", "TTO", "Patient", "Walker"),
       values = r2,
       domain = list(x = c(0.52, 1)),
       marker = list(colors = brewer.pal(length(r2), "Set1")),
@@ -456,261 +476,4 @@ server_pie <- function(input, output, session) {
 
 # Run the Application 
 shinyApp(ui = ui, server = server_pie)
-
-
-
-
-## DO NOT USE BELOW ##
-# ####
-## Using Raw Data for Gaussian Mixture Modeling (GMM) --------------
-# This method is bad, Silhouette Scores are much lower
-# Find Optimal # of Cluster Centers
-# Elbow
-for (x in c(1:20)) {
-  
-  cluster <- Mclust(statcast_adj[,6:ncol(statcast_adj)], G = x)
-  wcss[nrow(wcss) + 1, ] <- c(x, cluster$tot.withinss)
-  
-} 
-
-
-# Silhouette Score
-silhouette_scores <- sapply(2:15, function(k) {
-  gmm_model <- Mclust(statcast_adj[,6:ncol(statcast_adj)], G = k)
-  silhouette_score <- silhouette(gmm_model$classification, 
-                                 dist(
-                                   statcast_adj[,6:ncol(statcast_adj)]))
-  #ss <- silhouette(km$cluster, dist(pc))
-  mean(silhouette_score[, 3])
-})
-
-
-# Plot Silhouette scores
-plot(2:15, silhouette_scores, type = "b", 
-     xlab = "Number of Clusters", 
-     ylab = "Silhouette Score", 
-     main = "Silhouette Score vs. Number of Clusters")
-
-
-
-gmm_mlb <- Mclust(statcast_adj[,6:ncol(statcast_adj)], G = 6)
-fviz_cluster(gmm_mlb, data = statcast_adj[,6:ncol(statcast_adj)], 
-             geom = "point", alpha = 0.5,
-             show.clust.cent = TRUE)
-gmm_mlb$parameters$mean
-
-
-
-# Probability of Being in each Cluster
-cluster_probs <- round(predict(gmm_mlb, 
-                               data = 
-                                 statcast_adj[,6:ncol(statcast_adj)])$z, 
-                       3)
-head(cluster_probs)
-
-
-batter_archetypes_gmm <- statcast_adj %>%
-  cbind(gmm_mlb$classification, cluster_probs) %>%
-  rename("Cluster" = `gmm_mlb$classification`,
-         "name" = last_name..first_name,
-         "probC1" = c('1'),
-         "probC2" = c('2'),
-         "probC3" = c('3'),
-         "probC4" = c('4'),
-         "probC5" = c('5'),
-         "probC6" = c('6'),) %>%
-  select(-Cluster, Cluster)
-  
-
-batter_archetypes_gmm_agg <- batter_archetypes_gmm %>%
-  group_by(Cluster) %>%
-  pivot_longer(cols = c(5:ncol(batter_archetypes_gmm)-1), 
-               names_to = "variable", 
-               values_to = "value") %>%
-  group_by(Cluster, variable) %>%
-  summarize(avg_value = mean(value)) %>%
-  pivot_wider(names_from = variable, values_from = avg_value) %>%
-  mutate_at(vars(c('probC1', 'probC2', 'probC3', 
-                   'probC4', 'probC5', 'probC6')), ~ round(., 3)) %>%
-  as.data.frame() %>%
-  arrange(desc(woba))
-
-
-
-# 1 = HR or Bust - high HR%, low BB%, high K%, below Avg Contact %
-# 2 = Superstar - balance of power, patience, and contact
-# 3 = TTO - high HR%, high BB%, high K%
-# 4 = High Contact, Avg Power numbers, good discipline
-# 5 = Frequent but weak contact, low power numbers
-# 6 = Jack of all Trades
-
-batter_archetypes_gmm %>%
-  filter(Cluster == 2, year == 2015)
-
-batter_archetypes_gmm %>%
-  filter(name == "Trout, Mike")
-
-
-
-
-
-
-
-
-
-
-
-
-
-## PCA to transform data for K-means (NOT USED) -----------------------
-pca <- prcomp(statcast_adj[,11:(length(names(statcast_adj)))], 
-              scale. = TRUE)
-summary(pca)
-
-ggplot(as.data.frame(pca$x), aes(x = PC1, y = PC2)) + 
-  geom_point() + coord_fixed()
-
-
-# Eigenvalues
-pca$sdev
-
-# Matrix of eigenvectors
-pca$rotation
-
-# Mean of each UNSCALED predictor
-pca$center
-
-# St Dev of each UNSCALED predictor
-pca$scale
-
-# Input data transformed into PCA space
-pca$x
-
-# Elbow Curve for PCA
-screeplot(pca, type = "lines", col = "blue") # 4 is best
-
-# Get first 4 principal components
-pc <- pca$x[,1:2]
-pc
-
-
-
-
-# Loops through varying number of cluster centers for k-means
-wcss <- data.frame("k" = numeric(), "tot_withinss" = numeric())
-
-for (x in c(1:20)) {
-  
-  cluster <- kmeans(pc, centers = x, iter.max = 10, nstart = 1000)
-  wcss[nrow(wcss) + 1, ] <- c(x, cluster$tot.withinss)
-  
-} 
-
-# Elbow Method
-elbow <- ggplot(wcss, aes(x = wcss$k, y = wcss$tot_withinss)) +
-  geom_line() + geom_point() +
-  scale_x_continuous(breaks = 1:20) # k = 3 is best
-
-
-# Silhouette Score
-silhouette_score <- function(k){
-  km <- kmeans(pc, centers = k, nstart = 25)
-  ss <- silhouette(km$cluster, dist(pc))
-  mean(ss[, 3])
-}
-
-k <- 2:15
-avg_sil <- sapply(k, silhouette_score)
-plot(k, type = 'b', avg_sil, xlab = 'Number of clusters', 
-     ylab = 'Average Silhouette Scores', frame = FALSE)
-
-
-
-
-# K-means
-kmeans_mlb <- kmeans(pc, centers = 5, nstart = 1000)
-fviz_cluster(kmeans_mlb, data = pc, geom = "point")
-
-
-
-batter_archetypes <- cbind(statcast_adj, kmeans_mlb$cluster)
-batter_archetypes %>%
-  group_by(`kmeans_mlb$cluster`) %>%
-  pivot_longer(cols = c(5:17), 
-               names_to = "variable", 
-               values_to = "value") %>%
-  group_by(`kmeans_mlb$cluster`, variable) %>%
-  summarize(avg_value = mean(value)) %>%
-  pivot_wider(names_from = variable, values_from = avg_value) %>%
-  as.data.frame() %>%
-  arrange(desc(woba))
-
-batter_archetypes %>%
-  filter(`kmeans_mlb$cluster` == 7, year == 2022)
-# 4 = High Contact, low K%, moderate power
-# 1 = Jack-of-All-Trades
-# 3 = Frequent but weaker contact, moderate BB%, low K%
-# 2 = TTO - high BB%, high K%, high Barrel% and HR%
-# 7 = Superstars - good balance of contact, high power, and discipline
-# 6 = Chasers - high K% and chase %
-# 5 = good power, higher contact, low K%, low whiff %
-
-batter_archetypes %>%
-  filter(last_name..first_name == "LeMahieu, DJ")
-
-## Junk --------------------------
-batter_archetypes_gmm %>%
-  mutate_at(vars(starts_with("probC")), 
-            list(wavg_adj_hr_rate = ~ 
-                   sum(adj_hr_rate * .) / sum(.))) %>%
-  select((ncol(.) - 5):ncol(.)) %>%
-  head(1) %>%
-  t() %>%
-  as.data.frame() %>%
-  rename(wavg_adj_hr_rate = c('1'))
-
-
-columns <- names(pca$rotation[,1])
-wavg_function <- function(column) {
-  
-  use <- sym(paste("wavg_", column, sep = ""))
-  
-  batter_archetypes_gmm %>%
-    mutate_at(vars(starts_with("probC")), 
-              list(use = ~ sum(sym(column) * .) / sum(.))) %>%
-    select((ncol(.) - 5):ncol(.)) %>%
-    head(1) %>%
-    t() %>%
-    as.data.frame() %>%
-    rename(use = c('1')) -> stored_result
-  
-  return(stored_result)
-}
-
-wavg_function <- function(column) {
-  
-  use <- sym(paste("wavg_", column, sep = ""))
-  
-  
-  return(use)
-}
-class(sym(columns[1]))
-wavg_function(columns[1])
-
-archetypes_gmm_agg <- 
-  data.frame(Cluster = c(1:6),
-             probC1 = batter_archetypes_gmm_agg$probC1,
-             probC2 = batter_archetypes_gmm_agg$probC2,
-             probC3 = batter_archetypes_gmm_agg$probC3,
-             probC4 = batter_archetypes_gmm_agg$probC4,
-             probC5 = batter_archetypes_gmm_agg$probC5,
-             probC6 = batter_archetypes_gmm_agg$probC6)
-
-
-
-
-
-
-
-
 
