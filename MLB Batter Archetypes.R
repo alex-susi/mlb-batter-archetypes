@@ -13,6 +13,8 @@ library(RColorBrewer)
 library(stringr)
 library(knitr)
 library(ClusterR)
+library(stringi)
+library(boot)
 
 
 statcast <- read.csv("statcast4.csv")
@@ -55,7 +57,6 @@ statcast_adj <- statcast %>%
   group_by(year) %>%
   mutate(across(c(k_percent, bb_percent, xba, xslg, xwoba, xwobacon, 
                   barrel_batted_rate, hard_hit_percent, 
-                  #sweet_spot_percent,
                   z_swing_miss_percent, oz_swing_percent, 
                   oz_swing_miss_percent, hr_rate), 
                 ~ . / weighted.mean(., pa) * 100, 
@@ -142,7 +143,7 @@ for (m in models) {
 
 
 # Plot Silhouette scores
-plot(silhouette_scores[4:11,2], silhouette_scores[4:11,3], type = "b", 
+plot(silhouette_scores[2:20,2], silhouette_scores[2:20,3], type = "b", 
      xlab = "Number of Clusters", 
      ylab = "Silhouette Score", 
      main = "Silhouette Score vs. Number of Clusters")
@@ -151,11 +152,17 @@ silhouette_scores %>%
   arrange(desc(Clusters)) %>%
   head(n = 10)
 
+gmm_bic <- mclustBIC(pc, modelNames = c("EEI", "VEI", "EVI", "VVI",
+                                        "EEE", "VEE", "EVE", "VVE",
+                                        "EEV", "VEV", "EVV", "VVV"),
+                     G = 4:12)
+gmm_bic <- mclustBIC(pc, G = 4:12)
+plot(gmm_bic)
 
 
 
 
-## Gaussian Mixture Modeling (GMM) ---------------------------------------
+## Gaussian Mixture Model (GMM) ------------------------------------------
 set.seed(123)
 clusters <- 8
 gmm_mlb <- Mclust(pc, G = clusters, modelNames = 'EII')
@@ -166,6 +173,47 @@ round(gmm_mlb$parameters$mean, 4)
 
 
 
+
+
+## Bootstrapping for Validation ------------------------------------------
+
+# Function for consistent cluster labeling
+get_consistent_labels <- function(gmm) {
+  cluster_means <- apply(gmm$parameters$mean, 2, mean)
+  order_clusters <- order(cluster_means)
+  consistent_labels <- match(gmm$classification, order_clusters)
+  return(consistent_labels)
+}
+
+# Bootstrapping function
+original_labels <- get_consistent_labels(gmm_mlb)
+bootstrap_gmm <- function(data, n_clusters) {
+  sample_indices <- sample(1:nrow(data), replace = TRUE)
+  bootstrap_sample <- data[sample_indices, ]
+  #set.seed(123)
+  bootstrap_model <- Mclust(bootstrap_sample, G = n_clusters,
+                            modelNames = 'EII')
+  consistent_labels <- get_consistent_labels(bootstrap_model)
+  return(adjustedRandIndex(original_labels[sample_indices], 
+                           consistent_labels))
+}
+
+
+ari_scores <- unlist(replicate(500, bootstrap_gmm(pc, clusters),
+                               simplify = FALSE))
+
+# Summary statistics of ARI scores
+summary(ari_scores)
+
+# Histogram of ARI scores
+hist(ari_scores, breaks = 20, 
+     main = "Distribution of ARI Scores", xlab = "Adjusted Rand Index")
+
+
+
+
+
+## Exploring Model Results -----------------------------------------------
 # Joins Cluster Probabilities with Player Data
 batter_archetypes <- statcast_adj %>%
   cbind(gmm_mlb$classification, 
@@ -177,9 +225,12 @@ batter_archetypes <- statcast_adj %>%
   mutate(maxProb = do.call(pmax, select(., starts_with("probC"))),
          PlayerYear = paste(str_split(name, ", ", simplify = T)[, 2],
                             str_split(name, ", ", simplify = T)[, 1],
-                            year, sep = " ")) %>%
+                            year, sep = " "),
+         iso = slg - avg) %>%
+  relocate(iso, .after = ops) %>%
   arrange(PlayerYear)
 
+write.csv(batter_archetypes, "batter_archetypes.csv")
 
 
 
@@ -198,22 +249,19 @@ cols_to_summarize <- batter_archetypes %>%
 
 
 batter_archetypes_agg <- batter_archetypes %>%
-  pivot_longer(cols = all_of(weight_cols), names_to = "Cluster", 
+  pivot_longer(cols = all_of(weight_cols), names_to = "ClusterPivot", 
                names_prefix = "probC", values_to = "weight", 
                names_repair = "unique") %>%
-  group_by(Cluster...23) %>%
+  group_by(Cluster) %>%
   summarize(across(all_of(cols_to_summarize), ~ weighted_mean(., weight), 
                    .names = "{col}")) %>%
   mutate(across(c(ends_with('+')), round, 2)) %>%
   mutate(across(c(avg, obp, slg, ops, woba), round, 3)) %>%
-  mutate(iso = slg - avg) %>%
-  relocate(iso, .after = ops) %>%
-  rename("Cluster" = `Cluster...23`) %>%
   as.data.frame()
 
 
 
-# Exploring Results
+
 batter_archetypes %>%
   filter(Cluster == 2, year == 2016)
 
@@ -233,12 +281,21 @@ batter_archetypes %>%
   as.data.frame()
 
 batter_archetypes %>%
-  arrange(desc(probC3)) %>%
+  arrange(desc(probC2)) %>%
   #filter(year == 2023) %>%
-  select(-c(player_id, PlayerYear)) %>%
+  select(-c(player_id, PlayerYear, home_run, pa)) %>%
+  #select(c(name, year, avg, obp, slg, ops, iso, woba, maxProb)) %>%
+  distinct(name, .keep_all = TRUE) %>%
   #filter(year %in%  c(2023, 2022, 2021)) %>%
-  head(n = 20)
+  head(n = 10)
 
+batter_archetypes %>%
+  group_by(Cluster) %>%
+  slice_max(order_by = maxProb, n = 10) %>%
+  ungroup() %>%
+  select(-c(player_id, PlayerYear, home_run, pa)) %>%
+  as.data.frame() %>%
+  write.csv("top10.csv", row.names = FALSE, fileEncoding = "latin1")
 
 
 
