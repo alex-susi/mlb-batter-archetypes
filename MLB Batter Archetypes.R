@@ -17,7 +17,7 @@ library(stringi)
 library(boot)
 
 
-statcast <- read.csv("statcast4.csv")
+statcast <- read.csv("statcast.csv")
 
 
 
