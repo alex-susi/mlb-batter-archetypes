@@ -127,9 +127,12 @@ silhouette_scores <- data.frame("Model" = character(),
                                 "Clusters" = numeric(),
                                 "SilhouetteScore" = numeric())
 models <- c("EII")
+models <- c("EII", "VII", "EEI", "VEI", "EVI", 
+            "VVI", "EEE", "VEE", "EVE", "VVE",
+            "EEV", "VEV", "EVV", "VVV")
 
 for (m in models) {
-  for (c in c(2:20)) {
+  for (c in c(4:12)) {
     
     set.seed(23)
     gmm_model <- Mclust(pc, G = c, modelNames = m)
@@ -143,13 +146,13 @@ for (m in models) {
 
 
 # Plot Silhouette scores
-plot(silhouette_scores[2:20,2], silhouette_scores[2:20,3], type = "b", 
+plot(silhouette_scores[,2], silhouette_scores[,3], type = "b", 
      xlab = "Number of Clusters", 
      ylab = "Silhouette Score", 
      main = "Silhouette Score vs. Number of Clusters")
 
 silhouette_scores %>%
-  arrange(desc(Clusters)) %>%
+  arrange(desc(SilhouetteScore)) %>%
   head(n = 10)
 
 gmm_bic <- mclustBIC(pc, modelNames = c("EEI", "VEI", "EVI", "VVI",
@@ -281,7 +284,7 @@ batter_archetypes %>%
   as.data.frame()
 
 batter_archetypes %>%
-  arrange(desc(probC2)) %>%
+  arrange(desc(probC6)) %>%
   #filter(year == 2023) %>%
   select(-c(player_id, PlayerYear, home_run, pa)) %>%
   #select(c(name, year, avg, obp, slg, ops, iso, woba, maxProb)) %>%
