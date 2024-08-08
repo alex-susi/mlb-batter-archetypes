@@ -1,0 +1,12 @@
+name: mlb-batter-archetypes
+title: mlb-batter-archetypes
+username: alexsusi
+account: alexsusi
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12423550
+bundleId: 8959499
+url: https://alexsusi.shinyapps.io/mlb-batter-archetypes/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
