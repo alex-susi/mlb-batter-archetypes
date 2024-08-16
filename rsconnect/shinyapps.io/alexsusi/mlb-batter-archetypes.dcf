@@ -4,9 +4,10 @@ username: alexsusi
 account: alexsusi
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
-appId: 12423550
-bundleId: 8959499
+appId: 12449851
+bundleId: 8992558
 url: https://alexsusi.shinyapps.io/mlb-batter-archetypes/
 version: 1
 asMultiple: FALSE
 asStatic: FALSE
+ignoredFiles: .RData|Archive/MLB Batter Archetypes v2.R|Archive/MLB Batter Archetypes.R|arraez.csv|batter.csv|batter_archetypes.csv|batter_archetypes_agg.csv|BregmanBichette.csv|cluster_plot.html|content/post/2020-12-01-r-rmarkdown/index.Rmd|index.Rmd|MLB Batter Archetypes v3.R|pc.csv|pcClust.csv|pcleaders.csv|public/categories/index.xml|public/index.xml|public/post/2020-12-01-r-rmarkdown/index.Rmd|public/sitemap.xml|public/tags/index.xml|R/build.R|R/build2.R|README.md|stanton.csv|statcast_adj.csv|top10.csv
